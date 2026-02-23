@@ -528,8 +528,10 @@ void handle_m3u8(const int connfd) {
             readfull(connfd, &adam[i], sizeof(uint8_t));
         }
         adam[adamSize] = '\0';
+        fprintf(stderr, "[.] Received M3U8 request for track ID: %s (size: %d)\n", adam, adamSize);
         char *ptr;
         unsigned long adamID = strtoul(adam, &ptr, 10);
+        fprintf(stderr, "[.] Parsed as: %ld\n", adamID);
         const char *m3u8 = get_m3u8_method_play(leaseMgr, adamID);
         if (m3u8 == NULL) {
             fprintf(stderr, "[.] failed to get m3u8 of adamId: %ld\n", adamID);
@@ -567,7 +569,7 @@ static inline void *new_socket_m3u8(void *args) {
         perror("listen");
     }
 
-    fprintf(stderr, "[!] listening m3u8 request on %s:%d\n", args_info.host_arg, args_info.m3u8_port_arg);
+    fprintf(stderr, "[!] listening for m3u8 request on %s:%d\n", args_info.host_arg, args_info.m3u8_port_arg);
     // close(STDOUT_FILENO);
 
     static struct sockaddr_in peer_addr;
