@@ -470,19 +470,22 @@ const char* get_m3u8_method_play(uint8_t leaseMgr[16], unsigned long adam) {
     _ZN22SVPlaybackLeaseManager12requestAssetERKmRKNSt6__ndk16vectorINS2_12basic_stringIcNS2_11char_traitsIcEENS2_9allocatorIcEEEENS7_IS9_EEEERKb(
         &ptr_result, leaseMgr, &adam, &HLSParam, &z0
     );
-    
+
     if (ptr_result.obj == NULL) {
+        fprintf(stderr, "[!] requestAsset returned NULL for adamId: %ld\n", adam);
         return NULL;
     }
 
     if (_ZNK23SVPlaybackAssetResponse13hasValidAssetEv(ptr_result.obj)) {
         struct shared_ptr *playbackAsset = _ZNK23SVPlaybackAssetResponse13playbackAssetEv(ptr_result.obj);
         if (playbackAsset == NULL || playbackAsset->obj == NULL) {
+            fprintf(stderr, "[!] playbackAsset is NULL for adamId: %ld\n", adam);
             return NULL;
         }
 
         union std_string *m3u8 = malloc(sizeof(union std_string));
         if (m3u8 == NULL) {
+            fprintf(stderr, "[!] malloc failed for adamId: %ld\n", adam);
             return NULL;
         }
 
@@ -490,19 +493,22 @@ const char* get_m3u8_method_play(uint8_t leaseMgr[16], unsigned long adam) {
         _ZNK17storeservicescore13PlaybackAsset9URLStringEv(m3u8, playbackObj);
 
         if (m3u8 == NULL || std_string_data(m3u8) == NULL) {
+            fprintf(stderr, "[!] URLString extraction failed for adamId: %ld\n", adam);
             free(m3u8);
             return NULL;
         }
-        
+
         const char *m3u8_str = std_string_data(m3u8);
         if (m3u8_str) {
             char *result = strdup(m3u8_str);  // Make a copy
             free(m3u8);
             return result;
         } else {
+            fprintf(stderr, "[!] URLString data is NULL for adamId: %ld\n", adam);
             return NULL;
         }
     } else {
+        fprintf(stderr, "[!] hasValidAsset returned false for adamId: %ld\n", adam);
         return NULL;
     }
 }
