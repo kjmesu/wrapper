@@ -513,14 +513,34 @@ const char* get_m3u8_method_play(uint8_t leaseMgr[16], unsigned long adam) {
     }
 }
 
+static __thread jmp_buf m3u8_jmpbuf;
+static __thread int m3u8_do_jump = 0;
+
+static void m3u8_segv_handler(int sig) {
+    if (m3u8_do_jump) {
+        m3u8_do_jump = 0;
+        siglongjmp(m3u8_jmpbuf, 1);
+    }
+}
+
 void handle_m3u8(const int connfd) {
+    // Install signal handler for segfaults during M3U8 requests
+    struct sigaction sa, old_sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = m3u8_segv_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGSEGV, &sa, &old_sa);
+
     while (1)
     {
         uint8_t adamSize;
         if (!readfull(connfd, &adamSize, sizeof(uint8_t))) {
+            sigaction(SIGSEGV, &old_sa, NULL);
             return;
         }
         if (adamSize <= 0) {
+            sigaction(SIGSEGV, &old_sa, NULL);
             return;
         }
         char adam[adamSize + 1];
@@ -532,7 +552,18 @@ void handle_m3u8(const int connfd) {
         char *ptr;
         unsigned long adamID = strtoul(adam, &ptr, 10);
         fprintf(stderr, "[.] Parsed as: %ld\n", adamID);
-        const char *m3u8 = get_m3u8_method_play(leaseMgr, adamID);
+
+        const char *m3u8 = NULL;
+        if (sigsetjmp(m3u8_jmpbuf, 1) == 0) {
+            m3u8_do_jump = 1;
+            m3u8 = get_m3u8_method_play(leaseMgr, adamID);
+            m3u8_do_jump = 0;
+        } else {
+            // Caught a segfault
+            fprintf(stderr, "[!] SEGFAULT caught for adamId: %ld\n", adamID);
+            m3u8 = NULL;
+        }
+
         if (m3u8 == NULL) {
             fprintf(stderr, "[.] failed to get m3u8 of adamId: %ld\n", adamID);
             writefull(connfd, "\n", sizeof("\n"));
