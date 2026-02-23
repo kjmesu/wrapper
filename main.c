@@ -6,7 +6,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <pthread.h>
-#include <stdarg.h>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -15,142 +14,18 @@
 
 #include "import.h"
 #include "cmdline.h"
-#include "cjson/cjson.h"
 #ifndef MyRelease
 #include "subhook/subhook.c"
-#include "subhook/subhook.h"
 #endif
 
 static struct shared_ptr apInf;
 static uint8_t leaseMgr[16];
-static struct shared_ptr reqCtx;
 struct gengetopt_args_info args_info;
 char *amUsername, *amPassword;
-struct shared_ptr GUID;
-int decryptCount = 1000;
-int offlineFlag;
-char *device_infos[9];
-
-// Account info cache
-static char *g_storefront_id = NULL;
-static char *g_dev_token = NULL;
-static char *g_music_token = NULL;
-
-#ifndef MyRelease
-int32_t CURLOPT_SSL_VERIFYPEER = 64;
-int32_t CURLOPT_SSL_VERIFYHOST = 81;
-int32_t CURLOPT_PINNEDPUBLICKEY = 10230;
-
-subhook_t curl_hook;
-
-void curl_easy_setopt_hook(void *curl, int32_t option, ...) {
-    va_list args;
-    va_start(args, option);
-    void* param = va_arg(args, void*);
-    
-    subhook_remove(curl_hook);
- 
-    if (option == CURLOPT_SSL_VERIFYPEER || 
-        option == CURLOPT_SSL_VERIFYHOST || 
-        option == CURLOPT_PINNEDPUBLICKEY) {
-        curl_easy_setopt(curl, option, 0L);
-        printf("[+] hooked curl_easy_setopt %d\n", option);
-    } else {
-        curl_easy_setopt(curl, option, param);
-    }
- 
-    va_end(args);
-    subhook_install(curl_hook);
-}
-
-int android_log_print_hook(int prio, const char *tag, const char *fmt, ...) {
-    char log_buffer[1024];
-    va_list args;
-    va_start(args, fmt);
-    vsnprintf(log_buffer, sizeof(log_buffer), fmt, args);
-    va_end(args);
-    printf("[%s] %s\n", tag, log_buffer);
-    return 0;
-}
-
-int android_log_write_hook(int prio, const char *tag, const char *text) {
-    printf("[%s] %s\n", tag, text);
-    return 0;
-}
-
-void DumpHex(const void* data, size_t size) {
-	char ascii[17];
-	size_t i, j;
-	ascii[16] = '\0';
-	for (i = 0; i < size; ++i) {
-		printf("%02X ", ((unsigned char*)data)[i]);
-		if (((unsigned char*)data)[i] >= ' ' && ((unsigned char*)data)[i] <= '~') {
-			ascii[i % 16] = ((unsigned char*)data)[i];
-		} else {
-			ascii[i % 16] = '.';
-		}
-		if ((i+1) % 8 == 0 || i+1 == size) {
-			printf(" ");
-			if ((i+1) % 16 == 0) {
-				printf("|  %s \n", ascii);
-			} else if (i+1 == size) {
-				ascii[(i+1) % 16] = '\0';
-				if ((i+1) % 16 <= 8) {
-					printf(" ");
-				}
-				for (j = (i+1) % 16; j < 16; ++j) {
-					printf("   ");
-				}
-				printf("|  %s \n", ascii);
-			}
-		}
-	}
-}
-#endif
 
 int file_exists(char *filename) {
   struct stat buffer;   
   return (stat (filename, &buffer) == 0);
-}
-
-char *strcat_b(char *dest, char* src) {
-    size_t len1 = strlen(dest);
-    size_t len2 = strlen(src);
-
-    char *result = malloc(len1 + len2 + 1);
-    if (!result) return NULL; 
-
-    strcpy(result, dest);
-    strcat(result, src);
-
-    return result;
-}
-
-int split_string_safe(const char *str, const char *delim, char **components, 
-                      int max_components, char **out_copy_to_free) 
-{
-    *out_copy_to_free = NULL;
-
-    char *copy = strdup(str);
-    if (copy == NULL) {
-        return -1; 
-    }
-
-    *out_copy_to_free = copy;
-
-    int count = 0;
-    char *saveptr;
-    char *token;
-
-    token = strtok_r(copy, delim, &saveptr);
-
-    while (token != NULL && count < max_components) {
-        components[count] = token;
-        count++;
-        token = strtok_r(NULL, delim, &saveptr);
-    }
-
-    return count;
 }
 
 static void dialogHandler(long j, struct shared_ptr *protoDialogPtr,
@@ -211,8 +86,8 @@ static void credentialHandler(struct shared_ptr *credReqHandler,
 
     if (need2FA) {
         if (args_info.code_from_file_flag) {
-            fprintf(stderr, "[!] Enter your 2FA code into rootfs/%s/2fa.txt\n", args_info.base_dir_arg);
-            fprintf(stderr, "[!] Example command: echo -n 114514 > rootfs/%s/2fa.txt\n", args_info.base_dir_arg);
+            fprintf(stderr, "[!] Enter your 2FA code into rootfs/data/code.txt\n");
+            fprintf(stderr, "[!] Example command: echo -n 114514 > rootfs/data/2fa.txt\n");
             fprintf(stderr, "[!] Waiting for input...\n");
             int count = 0;
             while (1)
@@ -221,11 +96,10 @@ static void credentialHandler(struct shared_ptr *credReqHandler,
                     fprintf(stderr, "[!] Failed to get 2FA Code in 60s. Exiting...\n");
                     exit(0);
                 }
-                char *path = strcat_b(args_info.base_dir_arg, "/2fa.txt");
-                if (file_exists(path)) {
-                    FILE *fp = fopen(path, "r");
+                if (file_exists("/data/2fa.txt")) {
+                    FILE *fp = fopen("/data/2fa.txt", "r");
                     fscanf(fp, "%6s", amPassword + passLen);
-                    remove(path);
+                    remove("/data/2fa.txt");
                     fprintf(stderr, "[!] Code file detected! Logging in...\n");
                     break;
                 } else {
@@ -273,18 +147,24 @@ static inline void init() {
     fprintf(stderr, "[+] starting...\n");
     setenv("ANDROID_DNS_MODE", "local", 1);
     if (args_info.proxy_given) {
-        fprintf(stderr, "[+] Using proxy %s\n", args_info.proxy_arg);
-        setenv("all_proxy", args_info.proxy_arg, 1);
+        fprintf(stderr, "[+] Using proxy %s", args_info.proxy_arg);
+        setenv("http_proxy", args_info.proxy_arg, 1);
+        setenv("https_proxy", args_info.proxy_arg, 1);
     }
 
-    static const char *resolvers[2] = {"223.5.5.5", "223.6.6.6"};
+    static const char *resolvers[2] = {"1.1.1.1", "1.0.0.1"};
     _resolv_set_nameservers_for_net(0, resolvers, 2, ".");
+#ifndef MyRelease
+    subhook_install(subhook_new(
+        _ZN13mediaplatform26DebugLogEnabledForPriorityENS_11LogPriorityE,
+        allDebug, SUBHOOK_64BIT_OFFSET));
+#endif
 
     // static char android_id[16];
     // for (int i = 0; i < 16; ++i) {
     //     android_id[i] = "0123456789abcdef"[rand() % 16];
     // }
-    union std_string conf1 = new_std_string(device_infos[8]);
+    union std_string conf1 = new_std_string(android_id);
     union std_string conf2 = new_std_string("");
     _ZN14FootHillConfig6configERKNSt6__ndk112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEE(
         &conf1);
@@ -296,6 +176,7 @@ static inline void init() {
     //     foothill, &root, &natLib);
     // _ZN8FootHill24defaultContextIdentifierEv(foothill);
 
+    struct shared_ptr GUID;
     _ZN17storeservicescore10DeviceGUID8instanceEv(&GUID);
 
     static uint8_t ret[88];
@@ -308,7 +189,7 @@ static inline void init() {
 static inline struct shared_ptr init_ctx() {
     fprintf(stderr, "[+] initializing ctx...\n");
     union std_string strBuf =
-        new_std_string(strcat_b(args_info.base_dir_arg, "/mpl_db"));
+        new_std_string("/data/data/com.apple.android.music/files/mpl_db");
 
     struct shared_ptr reqCtx;
     _ZNSt6__ndk110shared_ptrIN17storeservicescore14RequestContextEE11make_sharedIJRNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEEEEES3_DpOT_(
@@ -324,28 +205,27 @@ static inline struct shared_ptr init_ctx() {
 	// _ZN17storeservicescore20RequestContextConfig9setCPFlagEb(reqCtx.obj, 1);
     _ZN17storeservicescore20RequestContextConfig20setBaseDirectoryPathERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE(
         reqCtxCfg.obj, &strBuf);
-    strBuf = new_std_string(device_infos[0]);
+    strBuf = new_std_string("Music");
     _ZN17storeservicescore20RequestContextConfig19setClientIdentifierERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE(
         reqCtxCfg.obj, &strBuf);
-    strBuf = new_std_string(device_infos[1]);
+    strBuf = new_std_string("4.9");
     _ZN17storeservicescore20RequestContextConfig20setVersionIdentifierERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE(
         reqCtxCfg.obj, &strBuf);
-    strBuf = new_std_string(device_infos[2]);
+    strBuf = new_std_string("Android");
     _ZN17storeservicescore20RequestContextConfig21setPlatformIdentifierERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE(
         reqCtxCfg.obj, &strBuf);
-    strBuf = new_std_string(device_infos[3]);
+    strBuf = new_std_string("10");
     _ZN17storeservicescore20RequestContextConfig17setProductVersionERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE(
         reqCtxCfg.obj, &strBuf);
-    strBuf = new_std_string(device_infos[4]);
+    strBuf = new_std_string("Samsung S9");
     _ZN17storeservicescore20RequestContextConfig14setDeviceModelERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE(
         reqCtxCfg.obj, &strBuf);
-    strBuf = new_std_string(device_infos[5]);
+    strBuf = new_std_string("7663313");
     _ZN17storeservicescore20RequestContextConfig15setBuildVersionERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE(
         reqCtxCfg.obj, &strBuf);
-    strBuf = new_std_string(device_infos[6]);
+    strBuf = new_std_string("en-US");
     _ZN17storeservicescore20RequestContextConfig19setLocaleIdentifierERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE(
         reqCtxCfg.obj, &strBuf);
-    strBuf = new_std_string(device_infos[7]);
     _ZN17storeservicescore20RequestContextConfig21setLanguageIdentifierERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE(
         reqCtxCfg.obj, &strBuf);
 
@@ -354,7 +234,7 @@ static inline struct shared_ptr init_ctx() {
     static uint8_t buf[88];
     _ZN17storeservicescore14RequestContext4initERKNSt6__ndk110shared_ptrINS_20RequestContextConfigEEE(
         &buf, reqCtx.obj, &reqCtxCfg);
-    strBuf = new_std_string(args_info.base_dir_arg);
+    strBuf = new_std_string("/data/data/com.apple.android.music/files");
     _ZN17storeservicescore14RequestContext24setFairPlayDirectoryPathERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE(
         reqCtx.obj, &strBuf);
 
@@ -378,12 +258,6 @@ extern void *pbErrCallback;
 
 inline static uint8_t login(struct shared_ptr reqCtx) {
     fprintf(stderr, "[+] logging in...\n");
-    if (file_exists(strcat_b(args_info.base_dir_arg, "/STOREFRONT_ID"))) {
-        remove(strcat_b(args_info.base_dir_arg, "/STOREFRONT_ID"));
-    }
-    if (file_exists(strcat_b(args_info.base_dir_arg, "/MUSIC_TOKEN"))) {
-        remove(strcat_b(args_info.base_dir_arg, "/MUSIC_TOKEN"));
-    }
     struct shared_ptr flow;
     _ZNSt6__ndk110shared_ptrIN17storeservicescore16AuthenticateFlowEE11make_sharedIJRNS0_INS1_14RequestContextEEEEEES3_DpOT_(
         &flow, &reqCtx);
@@ -472,15 +346,6 @@ inline static void *getKdContext(const char *const adam,
     if (kdContext != NULL && isPreshare)
         preshareCtx = kdContext;
     return kdContext;
-}
-
-void refresh_decrypt_ctx() {
-    uint8_t autom = 1;
-    _ZN22SVPlaybackLeaseManager12requestLeaseERKb(leaseMgr, &autom);
-    _ZN21SVFootHillSessionCtrl16resetAllContextsEv(FHinstance);
-    preshareCtx = NULL;
-    preshareCtx = getKdContext("0", "skd://itunes.apple.com/P000000000/s1/e1");
-    printf("[!] refreshed context\n");
 }
 
 void handle(const int connfd) {
@@ -597,37 +462,6 @@ inline static int new_socket() {
 }
 
 
-const char* get_m3u8_method_download(struct shared_ptr reqCtx, unsigned long adam) {
-    void *purchase_request = malloc(1024);
-    _ZN17storeservicescore15PurchaseRequestC2ERKNSt6__ndk110shared_ptrINS_14RequestContextEEE(purchase_request, &reqCtx);
-    _ZN17storeservicescore15PurchaseRequest23setProcessDialogActionsEb(purchase_request, 1);
-    union std_string urlBagKey = new_std_string("subDownload");
-    _ZN17storeservicescore15PurchaseRequest12setURLBagKeyERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE(purchase_request, &urlBagKey);
-    char *buyParametersStr = malloc(128);
-    sprintf(buyParametersStr, "salableAdamId=%lu&price=0&pricingParameters=SUBS&productType=S", adam);
-    union std_string buyParameters = new_std_string(buyParametersStr);
-    _ZN17storeservicescore15PurchaseRequest16setBuyParametersERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE(purchase_request, &buyParameters);
-    _ZN17storeservicescore15PurchaseRequest3runEv(purchase_request);
-    struct shared_ptr *response = _ZNK17storeservicescore15PurchaseRequest8responseEv(purchase_request);
-    struct shared_ptr *error = _ZN17storeservicescore16PurchaseResponse5errorEv(response->obj);;
-    if (error->obj == NULL) {
-        struct std_vector items = _ZNK17storeservicescore16PurchaseResponse5itemsEv(response->obj);
-        struct shared_ptr *firstItem = items.begin;
-        struct std_vector assets = _ZNK17storeservicescore12PurchaseItem6assetsEv(firstItem->obj);
-        struct shared_ptr *lastAsset = (struct shared_ptr *)assets.end - 1;
-        union std_string *url_str = malloc(sizeof(union std_string));
-        _ZNK17storeservicescore13PurchaseAsset3URLEv(url_str, lastAsset->obj);
-        const char *url = std_string_data(url_str);
-        if (url) {
-            char *result = strdup(url);  // Make a copy
-            free(url_str);
-            return result;
-        }
-    } 
-    return NULL;
-}
-
-
 const char* get_m3u8_method_play(uint8_t leaseMgr[16], unsigned long adam) {
     union std_string HLS = new_std_string_short_mode("HLS");
     struct std_vector HLSParam = new_std_vector(&HLS);
@@ -636,19 +470,22 @@ const char* get_m3u8_method_play(uint8_t leaseMgr[16], unsigned long adam) {
     _ZN22SVPlaybackLeaseManager12requestAssetERKmRKNSt6__ndk16vectorINS2_12basic_stringIcNS2_11char_traitsIcEENS2_9allocatorIcEEEENS7_IS9_EEEERKb(
         &ptr_result, leaseMgr, &adam, &HLSParam, &z0
     );
-    
+
     if (ptr_result.obj == NULL) {
+        fprintf(stderr, "[!] requestAsset returned NULL for adamId: %ld\n", adam);
         return NULL;
     }
 
     if (_ZNK23SVPlaybackAssetResponse13hasValidAssetEv(ptr_result.obj)) {
         struct shared_ptr *playbackAsset = _ZNK23SVPlaybackAssetResponse13playbackAssetEv(ptr_result.obj);
         if (playbackAsset == NULL || playbackAsset->obj == NULL) {
+            fprintf(stderr, "[!] playbackAsset is NULL for adamId: %ld\n", adam);
             return NULL;
         }
 
         union std_string *m3u8 = malloc(sizeof(union std_string));
         if (m3u8 == NULL) {
+            fprintf(stderr, "[!] malloc failed for adamId: %ld\n", adam);
             return NULL;
         }
 
@@ -656,19 +493,22 @@ const char* get_m3u8_method_play(uint8_t leaseMgr[16], unsigned long adam) {
         _ZNK17storeservicescore13PlaybackAsset9URLStringEv(m3u8, playbackObj);
 
         if (m3u8 == NULL || std_string_data(m3u8) == NULL) {
+            fprintf(stderr, "[!] URLString extraction failed for adamId: %ld\n", adam);
             free(m3u8);
             return NULL;
         }
-        
+
         const char *m3u8_str = std_string_data(m3u8);
         if (m3u8_str) {
             char *result = strdup(m3u8_str);  // Make a copy
             free(m3u8);
             return result;
         } else {
+            fprintf(stderr, "[!] URLString data is NULL for adamId: %ld\n", adam);
             return NULL;
         }
     } else {
+        fprintf(stderr, "[!] hasValidAsset returned false for adamId: %ld\n", adam);
         return NULL;
     }
 }
@@ -683,18 +523,14 @@ void handle_m3u8(const int connfd) {
         if (adamSize <= 0) {
             return;
         }
-        char adam[adamSize];
+        char adam[adamSize + 1];
         for (int i=0; i<adamSize; i=i+1) {
             readfull(connfd, &adam[i], sizeof(uint8_t));
         }
+        adam[adamSize] = '\0';
         char *ptr;
         unsigned long adamID = strtoul(adam, &ptr, 10);
-        const char *m3u8;
-        if (offlineFlag) {
-            m3u8 = get_m3u8_method_download(reqCtx, adamID);
-        } else {
-            m3u8 = get_m3u8_method_play(leaseMgr, adamID);
-        }
+        const char *m3u8 = get_m3u8_method_play(leaseMgr, adamID);
         if (m3u8 == NULL) {
             fprintf(stderr, "[.] failed to get m3u8 of adamId: %ld\n", adamID);
             writefull(connfd, "\n", sizeof("\n"));
@@ -757,325 +593,30 @@ static inline void *new_socket_m3u8(void *args) {
     }
 }
 
-void handle_account(const int connfd)
-{
-    char buffer[4096];
-    ssize_t n = read(connfd, buffer, sizeof(buffer) - 1);
-    if (n <= 0) {
-        return;
-    }
-    buffer[n] = '\0';
-
-    // Parse HTTP request (simple check for GET)
-    if (strncmp(buffer, "GET", 3) != 0 && strncmp(buffer, "POST", 4) != 0) {
-        const char *error_response = "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: 0\r\n\r\n";
-        writefull(connfd, (void *)error_response, strlen(error_response));
-        return;
-    }
-
-    // Format JSON response body
-    size_t json_size = 1024;
-    char *json_body = (char *)malloc(json_size);
-    if (json_body == NULL)
-    {
-        fprintf(stderr, "[.] failed to allocate memory for account response\n");
-        const char *error_response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: 0\r\n\r\n";
-        writefull(connfd, (void *)error_response, strlen(error_response));
-        return;
-    }
-
-    snprintf(json_body, json_size, "{\"storefront_id\":\"%s\",\"dev_token\":\"%s\",\"music_token\":\"%s\"}",
-             g_storefront_id, g_dev_token, g_music_token);
-
-    int json_len = strlen(json_body);
-
-    // Format HTTP response with headers
-    size_t response_size = 512;
-    char *http_response = (char *)malloc(response_size);
-    if (http_response == NULL)
-    {
-        fprintf(stderr, "[.] failed to allocate memory for HTTP response\n");
-        free(json_body);
-        const char *error_response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: 0\r\n\r\n";
-        writefull(connfd, (void *)error_response, strlen(error_response));
-        return;
-    }
-
-    snprintf(http_response, response_size, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
-             json_len);
-
-    fprintf(stderr, "[.] returning account info, storefront: %s\n", g_storefront_id);
-    writefull(connfd, http_response, strlen(http_response));
-    writefull(connfd, json_body, json_len);
-
-    free(http_response);
-    free(json_body);
-}
-
-static inline void *new_socket_account(void *args)
-{
-    const int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
-    if (fd == -1)
-    {
-        perror("socket");
-        return NULL;
-    }
-    const int optval = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval));
-
-    static struct sockaddr_in serv_addr = {.sin_family = AF_INET};
-    inet_pton(AF_INET, args_info.host_arg, &serv_addr.sin_addr);
-    serv_addr.sin_port = htons(args_info.account_port_arg);
-    if (bind(fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) == -1)
-    {
-        perror("bind");
-        return NULL;
-    }
-
-    if (listen(fd, 5) == -1)
-    {
-        perror("listen");
-        return NULL;
-    }
-
-    fprintf(stderr, "[!] listening account info request on %s:%d\n", args_info.host_arg, args_info.account_port_arg);
-
-    static struct sockaddr_in peer_addr;
-    static socklen_t peer_addr_size = sizeof(peer_addr);
-    while (1)
-    {
-        const int connfd = accept4(fd, (struct sockaddr *)&peer_addr,
-                                   &peer_addr_size, SOCK_CLOEXEC);
-        if (connfd == -1)
-        {
-            if (errno == ENETDOWN || errno == EPROTO || errno == ENOPROTOOPT ||
-                errno == EHOSTDOWN || errno == ENONET ||
-                errno == EHOSTUNREACH || errno == EOPNOTSUPP ||
-                errno == ENETUNREACH)
-                continue;
-            perror("accept4");
-        }
-
-        handle_account(connfd);
-
-        if (close(connfd) == -1)
-        {
-            perror("close");
-        }
-    }
-}
-
-char* get_account_storefront_id(struct shared_ptr reqCtx) {
-    union std_string *region = malloc(sizeof(union std_string));
-    struct shared_ptr urlbag = {.obj = 0x0, .ctrl_blk = 0x0};
-    _ZNK17storeservicescore14RequestContext20storeFrontIdentifierERKNSt6__ndk110shared_ptrINS_6URLBagEEE(region, reqCtx.obj, &urlbag);
-    const char *region_str = std_string_data(region);
-    if (region_str) {
-        char *result = strdup(region_str); 
-        free(region);
-        return result;
-    } 
-    return NULL;
-}
-
-void write_storefront_id(void) {
-    FILE *fp = fopen(strcat_b(args_info.base_dir_arg, "/STOREFRONT_ID"), "w");
-    printf("[+] StoreFront ID: %s\n", g_storefront_id);
-    fprintf(fp, "%s", g_storefront_id);
-    fclose(fp);
-}
-
-char *get_guid() {
-    char *ret[2];
-    _ZN17storeservicescore10DeviceGUID4guidEv(ret, GUID.obj);
-    char *guid = _ZNK13mediaplatform4Data5bytesEv(ret[0]);
-    return guid;
-}
-
-long long getCurrentTimeMillis() {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return tv.tv_sec * 1000LL + tv.tv_usec / 1000;
-}
-
-
-char *get_music_user_token(char *guid, char *authToken, struct shared_ptr reqCtx){
-    uint8_t ptr[480];
-    *(void **)(ptr) =
-        &_ZTVNSt6__ndk120__shared_ptr_emplaceIN13mediaplatform11HTTPMessageENS_9allocatorIS2_EEEE +
-        2;
-    struct shared_ptr httpMessage = {.obj = ptr + 32, .ctrl_blk = ptr};
-    union std_string url = new_std_string("https://play.itunes.apple.com/WebObjects/MZPlay.woa/wa/createMusicToken");
-    union std_string method = new_std_string("POST");
-    _ZN13mediaplatform11HTTPMessageC2ENSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES7_(httpMessage.obj, &url, &method);
-    union std_string contentTypeHeader = new_std_string("Content-Type");
-    union std_string contentTypeValue = new_std_string("application/json; charset=UTF-8");
-    _ZN13mediaplatform11HTTPMessage9setHeaderERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES9_(httpMessage.obj, &contentTypeHeader, &contentTypeValue);
-    union std_string expectHeader = new_std_string("Expect");
-    union std_string expectValue = new_std_string("");
-    _ZN13mediaplatform11HTTPMessage9setHeaderERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES9_(httpMessage.obj, &expectHeader, &expectValue);
-    union std_string bundleIdHeader = new_std_string("X-Apple-Requesting-Bundle-Id");
-    union std_string bundleIdValue = new_std_string("com.apple.android.music");
-    _ZN13mediaplatform11HTTPMessage9setHeaderERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES9_(httpMessage.obj, &bundleIdHeader, &bundleIdValue);
-    union std_string bundleVersionHeader = new_std_string("X-Apple-Requesting-Bundle-Version");
-    union std_string bundleVersionValue = new_std_string("Music/4.9 Android/10 model/Samsung S9 build/7663313 (dt:66)");
-    _ZN13mediaplatform11HTTPMessage9setHeaderERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES9_(httpMessage.obj, &bundleVersionHeader, &bundleVersionValue);
-    size_t body_size = 512;
-    char *body = (char *)malloc(body_size);
-    if (body == NULL) {
-        return "";
-    }
-
-    snprintf(body, body_size, "{\"guid\":\"%s\",\"assertion\":\"%s\",\"tcc-acceptance-date\":\"%lld\"}", guid, authToken, getCurrentTimeMillis());
-
-    _ZN13mediaplatform11HTTPMessage11setBodyDataEPcm(httpMessage.obj, body, strlen(body));
-    free(body);
-    uint8_t urlRequest[512];
-    _ZN17storeservicescore10URLRequestC2ERKNSt6__ndk110shared_ptrIN13mediaplatform11HTTPMessageEEERKNS2_INS_14RequestContextEEE(urlRequest, &httpMessage, &reqCtx);
-    _ZN17storeservicescore10URLRequest3runEv(urlRequest);
-    struct shared_ptr *err = _ZNK17storeservicescore10URLRequest5errorEv(urlRequest);
-    if (err->obj != NULL) {
-        return "";
-    }
-    struct shared_ptr *urlResp = _ZNK17storeservicescore10URLRequest8responseEv(urlRequest);
-    struct shared_ptr *resp = _ZNK17storeservicescore11URLResponse18underlyingResponseEv(urlResp->obj);
-    void *http_message_obj = resp->obj;
-    void** data_ptr_location = (void**)((char*)http_message_obj + 48);
-    void* data_ptr = *data_ptr_location;
-    char *respBody = _ZNK13mediaplatform4Data5bytesEv(data_ptr);
-    cJSON *json = cJSON_Parse(respBody);
-    cJSON *token_obj = cJSON_GetObjectItemCaseSensitive(json, "music_token");
-    char *token = cJSON_GetStringValue(token_obj);
-    char *result = strdup(token);
-    return result;
-}
-
-
-char* get_dev_token(struct shared_ptr reqCtx) {
-    uint8_t ptr[480];
-    *(void **)(ptr) =
-        &_ZTVNSt6__ndk120__shared_ptr_emplaceIN13mediaplatform11HTTPMessageENS_9allocatorIS2_EEEE +
-        2;
-    struct shared_ptr httpMessage = {.obj = ptr + 32, .ctrl_blk = ptr};
-    union std_string url = new_std_string("https://sf-api-token-service.itunes.apple.com/apiToken");
-    union std_string method = new_std_string("GET");
-    _ZN13mediaplatform11HTTPMessageC2ENSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES7_(httpMessage.obj, &url, &method);
-    uint8_t urlRequest[512];
-    _ZN17storeservicescore10URLRequestC2ERKNSt6__ndk110shared_ptrIN13mediaplatform11HTTPMessageEEERKNS2_INS_14RequestContextEEE(urlRequest, &httpMessage, &reqCtx);
-    union std_string clientIdName = new_std_string("clientId");
-    union std_string clientIdValue = new_std_string("musicAndroid");
-    _ZN17storeservicescore10URLRequest19setRequestParameterERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES9_(urlRequest, &clientIdName, &clientIdValue);
-    union std_string versionName = new_std_string("version");
-    union std_string versionValue = new_std_string("1");
-    _ZN17storeservicescore10URLRequest19setRequestParameterERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES9_(urlRequest, &versionName, &versionValue);
-    _ZN17storeservicescore10URLRequest3runEv(urlRequest);
-    struct shared_ptr *err = _ZNK17storeservicescore10URLRequest5errorEv(urlRequest);
-    if (err->obj != NULL) {
-        return "";
-    }
-    struct shared_ptr *urlResp = _ZNK17storeservicescore10URLRequest8responseEv(urlRequest);
-    struct shared_ptr *resp = _ZNK17storeservicescore11URLResponse18underlyingResponseEv(urlResp->obj);
-    void *http_message_obj = resp->obj;
-    void** data_ptr_location = (void**)((char*)http_message_obj + 48);
-    void* data_ptr = *data_ptr_location;
-    char *respBody = _ZNK13mediaplatform4Data5bytesEv(data_ptr);
-    cJSON *json = cJSON_Parse(respBody);
-    cJSON *token_obj = cJSON_GetObjectItemCaseSensitive(json, "token");
-    char *token = cJSON_GetStringValue(token_obj);
-    char *result = strdup(token);
-    return result;
-}
-
-void write_music_token(void) {
-    int token_file_available = 0;
-    if (file_exists(strcat_b(args_info.base_dir_arg, "/MUSIC_TOKEN"))) {
-        FILE *fp = fopen(strcat_b(args_info.base_dir_arg, "/MUSIC_TOKEN"), "r");
-        if (NULL != fp) {
-            fseek (fp, 0, SEEK_END);
-            long size = ftell(fp);
-
-            if (0 != size) {
-                token_file_available = 1;
-            }
-        }
-    }
-    if (token_file_available) {
-        char token[256];
-        FILE *fp = fopen(strcat_b(args_info.base_dir_arg, "/MUSIC_TOKEN"), "r");
-        fgets(token, sizeof(token), fp);
-        printf("[+] Music-Token: %.14s...\n", token);
-        return;
-    }
-    FILE *fp = fopen(strcat_b(args_info.base_dir_arg, "/MUSIC_TOKEN"), "w");
-    printf("[+] Music-Token: %.14s...\n", g_music_token);
-    fprintf(fp, "%s", g_music_token);
-    fclose(fp);
-}
-
-int offline_available() {
-    struct shared_ptr *fairplay = malloc(16);
-    _ZN17storeservicescore14RequestContext8fairPlayEv(fairplay, reqCtx.obj);
-    struct std_vector fairplay_status = _ZN17storeservicescore8FairPlay21getSubscriptionStatusEv(fairplay->obj);
-    char *begin_ptr = (char*)fairplay_status.begin;
-    char *second_item_ptr = begin_ptr + 16;
-    int state = *(int*)((char*)second_item_ptr + 8);
-    if (state == 2 || state == 3) { // kFPSubscriptionCanPlayContent, kFPSubscriptionCanStreamAndPlayContent
-        return 1;
-    } 
-    return 0;
-}
-
 int main(int argc, char *argv[]) {
     cmdline_parser(argc, argv, &args_info);
-    char *copy_that_needs_to_be_freed = NULL;
-    split_string_safe(args_info.device_info_arg, "/", device_infos, 9, &copy_that_needs_to_be_freed);
-
-    #ifndef MyRelease
-    subhook_install(subhook_new(_ZN13mediaplatform26DebugLogEnabledForPriorityENS_11LogPriorityE, allDebug, SUBHOOK_64BIT_OFFSET));
-    curl_hook = subhook_new(curl_easy_setopt, curl_easy_setopt_hook, SUBHOOK_64BIT_OFFSET);
-    subhook_install(curl_hook);
-    subhook_install(subhook_new(__android_log_print, android_log_print_hook, SUBHOOK_64BIT_OFFSET));
-    subhook_install(subhook_new(__android_log_write, android_log_write_hook, SUBHOOK_64BIT_OFFSET));
-    #endif
 
     init();
-    reqCtx = init_ctx();
+    const struct shared_ptr ctx = init_ctx();
     if (args_info.login_given) {
         amUsername = strtok(args_info.login_arg, ":");
         amPassword = strtok(NULL, ":");
     }
-    if (args_info.login_given && !login(reqCtx)) {
+    if (args_info.login_given && !login(ctx)) {
         fprintf(stderr, "[!] login failed\n");
         return EXIT_FAILURE;
     }
     _ZN22SVPlaybackLeaseManagerC2ERKNSt6__ndk18functionIFvRKiEEERKNS1_IFvRKNS0_10shared_ptrIN17storeservicescore19StoreErrorConditionEEEEEE(
         leaseMgr, &endLeaseCallback, &pbErrCallback);
     uint8_t autom = 1;
-    _ZN22SVPlaybackLeaseManager25refreshLeaseAutomaticallyERKb(leaseMgr, &autom);
+    _ZN22SVPlaybackLeaseManager25refreshLeaseAutomaticallyERKb(leaseMgr,
+                                                               &autom);
     _ZN22SVPlaybackLeaseManager12requestLeaseERKb(leaseMgr, &autom);
     FHinstance = _ZN21SVFootHillSessionCtrl8instanceEv();
-
-    offlineFlag = offline_available();
-    if (offlineFlag) {
-        printf("[+] This account supports offline channel\n");
-    }
-
-    // Cache account info
-    g_storefront_id = get_account_storefront_id(reqCtx);
-    g_dev_token = get_dev_token(reqCtx);
-    g_music_token = get_music_user_token(get_guid(), g_dev_token, reqCtx);
-    fprintf(stderr, "[+] account info cached successfully\n");
-
-    write_storefront_id();
-    write_music_token();
 
     pthread_t m3u8_thread;
     pthread_create(&m3u8_thread, NULL, &new_socket_m3u8, NULL);
     pthread_detach(m3u8_thread);
-
-    pthread_t account_thread;
-    pthread_create(&account_thread, NULL, &new_socket_account, NULL);
-    pthread_detach(account_thread);
-
+    
     return new_socket();
 }
