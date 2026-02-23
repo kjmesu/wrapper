@@ -12,6 +12,11 @@ jobs:
      steps:
        - uses: actions/checkout@v4
 
+       - name: Install dependencies
+         run: |
+           sudo apt-get update
+           sudo apt-get install -y qemu-utils qemu-block-extra libboost-all-dev
+          
        - name: Download wrapper-qemu basic image
          run: wget https://github.com/WorldObservationLog/wrapper/releases/download/wrapper-qemu/wrapper.qcow2
 
