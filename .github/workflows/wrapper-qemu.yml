@@ -31,7 +31,7 @@ jobs:
        - name: Download latest artifact
          uses: dawidd6/action-download-artifact@v6
          with:
-            github_token: ${{secrets.ACTION_TOKEN}}
+            github_token: ${{secrets.GITHUB_TOKEN}}
             run_id: ${{ github.event.workflow_run.id }}
       
        - name: Copy wrapper to image
