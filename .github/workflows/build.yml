@@ -15,11 +15,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: |
-        sudo apt update
-        sudo apt install -y qemu-utils qemu-block-extra libboost-all-dev
-
     - name: Install aria2
       run: sudo apt install aria2 -y
 
