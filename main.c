@@ -523,10 +523,11 @@ void handle_m3u8(const int connfd) {
         if (adamSize <= 0) {
             return;
         }
-        char adam[adamSize];
+        char adam[adamSize + 1];
         for (int i=0; i<adamSize; i=i+1) {
             readfull(connfd, &adam[i], sizeof(uint8_t));
         }
+        adam[adamSize] = '\0';
         char *ptr;
         unsigned long adamID = strtoul(adam, &ptr, 10);
         const char *m3u8 = get_m3u8_method_play(leaseMgr, adamID);
